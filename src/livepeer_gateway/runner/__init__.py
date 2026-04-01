@@ -7,6 +7,8 @@ deploy them to the Livepeer network.
 
 from .inputs import Input, InputDescriptor, Output, OutputDescriptor
 from .pipeline import Pipeline, PipelineMeta, StreamPipeline
+from .schema import extract_schema
+from .serve import PipelineServer, StreamPipelineServer
 
 __all__ = [
     "Input",
@@ -15,5 +17,8 @@ __all__ = [
     "OutputDescriptor",
     "Pipeline",
     "PipelineMeta",
+    "PipelineServer",
     "StreamPipeline",
+    "StreamPipelineServer",
+    "extract_schema",
 ]
