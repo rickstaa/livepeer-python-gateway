@@ -109,13 +109,18 @@ def _parse_inputs(raw_inputs: list[str]) -> dict[str, Any]:
 
 def cmd_predict(args: argparse.Namespace) -> None:
     """Run a local prediction."""
+    import inspect
+    from .serve import _validate_inputs
+
     pipeline_cls = _load_pipeline_class(args.module)
 
     _LOG.info("Instantiating %s...", pipeline_cls.__name__)
     pipeline = pipeline_cls()
     pipeline.setup()
 
-    params = _parse_inputs(args.input or [])
+    raw_params = _parse_inputs(args.input or [])
+    sig = inspect.signature(pipeline.predict)
+    params = _validate_inputs(raw_params, sig)
 
     _LOG.info("Running predict with params: %s", params)
     result = pipeline.predict(**params)
