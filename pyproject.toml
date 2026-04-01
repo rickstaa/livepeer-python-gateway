@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 generate-lp-rpc = "livepeer_gateway.codegen:main"
+livepeer = "livepeer_gateway.runner.cli:main"
 
 [project.optional-dependencies]
 dev = [
