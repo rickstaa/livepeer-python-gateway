@@ -124,30 +124,49 @@ class Pipeline(abc.ABC):
 class StreamPipeline(abc.ABC):
     """Base class for real-time streaming pipelines.
 
-    Subclasses must implement :meth:`setup` and :meth:`on_frame`.
-    Optionally override :meth:`on_params_update` to handle live
-    parameter changes (e.g. via WebRTC data channel or control messages).
+    Subclasses declare which modalities they consume and produce via
+    ``inputs`` and ``outputs``, then override the corresponding
+    callbacks.
 
-    Example::
+    **Video only** (default)::
 
         class StyleTransfer(StreamPipeline):
-            pipeline_id = "style-transfer"
-            gpu = "T4"
+            def on_video_frame(self, frame, **params):
+                return self.model.stylize(frame)
 
-            def setup(self):
-                ...
+    **Audio only**::
 
-            def on_frame(self, frame, **params):
-                ...
+        class NoiseRemoval(StreamPipeline):
+            inputs = ["audio"]
+            outputs = ["audio"]
 
-            def on_params_update(self, params):
-                self.current_style = params.get("style", self.current_style)
+            def on_audio_frame(self, frame, **params):
+                return self.model.denoise(frame)
+
+    **Video + Audio** (e.g. lip sync — audio updates state, video produces output)::
+
+        class LipSync(StreamPipeline):
+            inputs = ["video", "audio"]
+            outputs = ["video"]
+
+            def on_video_frame(self, frame, **params):
+                return self.model.sync(frame, self._phonemes)
+
+            def on_audio_frame(self, frame, **params):
+                self._phonemes = self.model.extract(frame)
+
+    The ``on_frame()`` method is kept as a backward-compatible alias
+    for ``on_video_frame()`` — override either one.
     """
 
     # -- Pipeline identity (overridden by subclasses) --
     pipeline_id: Optional[str] = None
     version: Optional[str] = None
     description: Optional[str] = None
+
+    # -- Modality declarations --
+    inputs: list[str] = ["video"]
+    outputs: list[str] = ["video"]
 
     # -- Resource hints --
     gpu: Optional[str] = None
@@ -172,14 +191,37 @@ class StreamPipeline(abc.ABC):
     def setup(self) -> None:
         """Load model weights and prepare for streaming inference."""
 
-    @abc.abstractmethod
     def on_frame(self, frame: Any, **params: Any) -> Any:
-        """Process a single input frame and return the output frame.
+        """Process a single input frame (backward-compatible alias).
 
-        *frame* is typically an ``av.VideoFrame`` but may also be raw
-        bytes depending on the transport configuration.  Additional
-        keyword arguments come from the most recent parameter update.
+        By default delegates to :meth:`on_video_frame`.  Override this
+        OR ``on_video_frame`` — not both.
         """
+        return self.on_video_frame(frame, **params)
+
+    def on_video_frame(self, frame: Any, **params: Any) -> Any:
+        """Process a single video frame and return the output frame.
+
+        Override this for video processing pipelines.  *frame* is
+        typically an ``av.VideoFrame`` or a
+        :class:`~livepeer_gateway.VideoDecodedMediaFrame`.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement on_video_frame(). "
+            "Override on_video_frame() or on_frame()."
+        )
+
+    def on_audio_frame(self, frame: Any, **params: Any) -> Any:
+        """Process a single audio frame.
+
+        Override this for audio processing pipelines.  *frame* is
+        typically an ``av.AudioFrame`` or a
+        :class:`~livepeer_gateway.AudioDecodedMediaFrame`.
+
+        Return a frame to publish audio output, or ``None`` to only
+        update internal state (e.g. for audio-reactive video pipelines).
+        """
+        return None
 
     def on_params_update(self, params: dict[str, Any]) -> None:
         """Handle a live parameter update.

@@ -90,7 +90,7 @@ class PipelineRegistry:
         result = []
         for pid, pipeline_cls in cls._pipelines.items():
             is_stream = issubclass(pipeline_cls, StreamPipeline)
-            result.append({
+            info: dict = {
                 "pipeline_id": pid,
                 "class_name": pipeline_cls.__name__,
                 "type": "stream" if is_stream else "pipeline",
@@ -98,7 +98,11 @@ class PipelineRegistry:
                 "description": getattr(pipeline_cls, "description", None),
                 "gpu": getattr(pipeline_cls, "gpu", None),
                 "min_vram_gb": getattr(pipeline_cls, "min_vram_gb", None),
-            })
+            }
+            if is_stream:
+                info["inputs"] = getattr(pipeline_cls, "inputs", ["video"])
+                info["outputs"] = getattr(pipeline_cls, "outputs", ["video"])
+            result.append(info)
         return result
 
     @classmethod

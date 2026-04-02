@@ -468,11 +468,90 @@ class StreamPipelineServer:
         subscribe_url: str,
         publish_url: str,
     ) -> None:
-        """Core streaming loop using trickle transport primitives."""
-        from ..trickle_subscriber import TrickleSubscriber
+        """Core streaming loop using trickle transport primitives.
+
+        When the subscribe channel carries MPEG-TS with both audio and
+        video tracks, decoded frames are dispatched to the appropriate
+        callback based on their type:
+
+        - ``VideoDecodedMediaFrame`` → ``on_video_frame()``
+        - ``AudioDecodedMediaFrame`` → ``on_audio_frame()``
+        - Raw bytes (no decoding) → ``on_frame()``
+        """
+        from ..media_decode import AudioDecodedMediaFrame, DecodedMediaFrame, VideoDecodedMediaFrame
+        from ..media_output import MediaOutput
         from ..trickle_publisher import TricklePublisher
+        from ..trickle_subscriber import TrickleSubscriber
 
         _LOG.info("Starting stream loop: subscribe=%s publish=%s", subscribe_url, publish_url)
+
+        has_video_in = "video" in self.pipeline.inputs
+        has_audio_in = "audio" in self.pipeline.inputs
+        use_media_output = has_video_in or has_audio_in
+
+        if use_media_output:
+            await self._stream_loop_decoded(subscribe_url, publish_url)
+        else:
+            await self._stream_loop_raw(subscribe_url, publish_url)
+
+    async def _stream_loop_decoded(
+        self,
+        subscribe_url: str,
+        publish_url: str,
+    ) -> None:
+        """Stream loop with frame decoding and typed dispatch."""
+        from ..media_decode import AudioDecodedMediaFrame, VideoDecodedMediaFrame
+        from ..media_output import MediaOutput
+        from ..media_publish import MediaPublish, MediaPublishConfig
+        from ..trickle_publisher import TricklePublisher
+
+        media_output = MediaOutput(subscribe_url)
+        publisher = TricklePublisher(publish_url, "application/octet-stream")
+        try:
+            async for frame in media_output.frames():
+                try:
+                    result = None
+                    if isinstance(frame, VideoDecodedMediaFrame):
+                        result = self.pipeline.on_video_frame(
+                            frame, **self._current_params
+                        )
+                    elif isinstance(frame, AudioDecodedMediaFrame):
+                        result = self.pipeline.on_audio_frame(
+                            frame, **self._current_params
+                        )
+                    else:
+                        result = self.pipeline.on_frame(
+                            frame, **self._current_params
+                        )
+
+                    if inspect.iscoroutine(result):
+                        result = await result
+
+                    if result is not None:
+                        if isinstance(result, bytes):
+                            output_bytes = result
+                        else:
+                            output_bytes = json.dumps(result).encode("utf-8")
+
+                        async with await publisher.next() as out_seg:
+                            await out_seg.write(output_bytes)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _LOG.exception("Error processing frame in stream loop")
+        finally:
+            await publisher.close()
+
+        _LOG.info("Stream loop ended")
+
+    async def _stream_loop_raw(
+        self,
+        subscribe_url: str,
+        publish_url: str,
+    ) -> None:
+        """Stream loop with raw segment bytes (no decoding)."""
+        from ..trickle_subscriber import TrickleSubscriber
+        from ..trickle_publisher import TricklePublisher
 
         async with TrickleSubscriber(subscribe_url) as subscriber:
             publisher = TricklePublisher(publish_url, "application/octet-stream")

@@ -166,6 +166,14 @@ def extract_schema(pipeline_cls: type) -> dict[str, Any]:
     if description:
         schema["description"] = description
 
+    # Modality declarations (StreamPipeline only)
+    inputs = getattr(pipeline_cls, "inputs", None)
+    if inputs and inputs != ["video"]:  # only include if non-default
+        schema["x-inputs"] = inputs
+    outputs = getattr(pipeline_cls, "outputs", None)
+    if outputs and outputs != ["video"]:
+        schema["x-outputs"] = outputs
+
     # Resource hints
     gpu = getattr(pipeline_cls, "gpu", None)
     if gpu:
