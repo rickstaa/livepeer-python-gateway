@@ -5,6 +5,7 @@ that let developers define AI pipelines as typed Python classes and
 deploy them to the Livepeer network.
 """
 
+from .decorators import pipeline as pipeline_decorator
 from .inputs import Input, InputDescriptor, Output, OutputDescriptor
 from .pipeline import Pipeline, PipelineState, StreamPipeline
 from .registry import PipelineRegistry
@@ -23,4 +24,5 @@ __all__ = [
     "StreamPipeline",
     "StreamPipelineServer",
     "extract_schema",
+    "pipeline_decorator",
 ]
