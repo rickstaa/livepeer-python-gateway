@@ -401,6 +401,22 @@ def setup(self, progress=None):
     progress("Loading UNet...", 0.7)
 ```
 
+### Decorator Shortcut
+
+A thin decorator for simple stateless pipelines (class-based remains primary):
+
+```python
+# Future API (not yet implemented)
+@livepeer.pipeline(gpu="A100")
+def upscale(image: bytes = Input(...)) -> Output(type="image"):
+    return do_upscale(image)
+```
+
+This creates a Pipeline class under the hood. Inspired by Modal/Chutes
+decorator patterns, but the class-based approach remains the primary
+interface since AI models are inherently stateful (load weights once,
+predict many times).
+
 ### Pipeline Discovery via Entry Points
 
 Publish pipelines as pip packages that are auto-discovered:
