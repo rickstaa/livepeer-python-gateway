@@ -18,6 +18,9 @@ from livepeer_gateway.runner import Input, Pipeline, StreamPipeline
 class StyleTransfer(StreamPipeline):
     """Apply style transfer to live video frames."""
 
+    pipeline_id = "style-transfer"
+    version = "1.0.0"
+    description = "Apply neural style transfer to live video frames"
     gpu = "T4"
 
     def setup(self) -> None:

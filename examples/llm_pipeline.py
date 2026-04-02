@@ -31,6 +31,9 @@ from livepeer_gateway.runner import Input, Output, Pipeline
 class TextGenerator(Pipeline):
     """Generate text from a prompt, streaming tokens via SSE."""
 
+    pipeline_id = "text-generator"
+    version = "1.0.0"
+    description = "Generate text from prompts with SSE token streaming"
     gpu = "A100"
     min_vram_gb = 40
 

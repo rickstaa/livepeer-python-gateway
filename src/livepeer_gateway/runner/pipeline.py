@@ -12,16 +12,31 @@ generation, and deployment.
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
+import enum
+import logging
 from typing import Any, Optional
 
+_LOG = logging.getLogger(__name__)
 
-@dataclass
-class PipelineMeta:
-    """Runtime metadata populated by the framework before ``setup()``."""
 
-    pipeline_id: Optional[str] = None
-    version: Optional[str] = None
+class PipelineState(str, enum.Enum):
+    """Health state of a pipeline instance.
+
+    Orchestrators and health probes use this to decide whether a
+    container is ready to accept work.
+    """
+
+    LOADING = "loading"
+    """Pipeline is loading model weights / warming up."""
+
+    READY = "ready"
+    """Pipeline is ready to accept requests."""
+
+    ERROR = "error"
+    """Pipeline encountered a fatal error during setup or inference."""
+
+    IDLE = "idle"
+    """Pipeline is loaded but not currently processing."""
 
 
 class Pipeline(abc.ABC):
@@ -29,9 +44,12 @@ class Pipeline(abc.ABC):
 
     Subclasses must implement :meth:`setup` and :meth:`predict`.
 
-    Class-level attributes control resource requirements::
+    Class-level attributes control resource requirements and metadata::
 
         class TextToImage(Pipeline):
+            pipeline_id = "text-to-image"
+            version = "1.0.0"
+            description = "Generate images from text prompts"
             gpu = "A100"
             min_vram_gb = 24
 
@@ -42,17 +60,30 @@ class Pipeline(abc.ABC):
                 ...
     """
 
+    # -- Pipeline identity (overridden by subclasses) --
+    pipeline_id: Optional[str] = None
+    version: Optional[str] = None
+    description: Optional[str] = None
+
     # -- Resource hints (overridden by subclasses) --
     gpu: Optional[str] = None
     min_vram_gb: Optional[int] = None
     cpu_only: bool = False
 
-    # -- Framework-managed metadata --
-    _meta: PipelineMeta = field(default_factory=PipelineMeta)
+    # -- Framework-managed state --
+    _state: PipelineState = PipelineState.IDLE
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        cls._meta = PipelineMeta()
+        # Auto-derive pipeline_id from class name if not set
+        if cls.pipeline_id is None:
+            cls.pipeline_id = cls.__name__.lower()
+        cls._state = PipelineState.IDLE
+
+    @property
+    def state(self) -> PipelineState:
+        """Current health state of the pipeline."""
+        return self._state
 
     @abc.abstractmethod
     def setup(self) -> None:
@@ -72,6 +103,23 @@ class Pipeline(abc.ABC):
         called.
         """
 
+    @classmethod
+    def prepare_models(cls) -> None:
+        """Download and prepare model artifacts ahead of time.
+
+        Override this to download model checkpoints, compile optimised
+        kernels, or perform other expensive one-time preparation that
+        should happen during Docker image build rather than at container
+        startup.
+
+        This is called separately from :meth:`setup` — typically via
+        ``livepeer prepare <module>`` or the ``PREPARE_MODELS=1``
+        environment variable during image build.
+
+        The default implementation is a no-op.
+        """
+        _LOG.info("%s.prepare_models(): no-op (override to download models)", cls.__name__)
+
 
 class StreamPipeline(abc.ABC):
     """Base class for real-time streaming pipelines.
@@ -83,6 +131,7 @@ class StreamPipeline(abc.ABC):
     Example::
 
         class StyleTransfer(StreamPipeline):
+            pipeline_id = "style-transfer"
             gpu = "T4"
 
             def setup(self):
@@ -95,15 +144,29 @@ class StreamPipeline(abc.ABC):
                 self.current_style = params.get("style", self.current_style)
     """
 
+    # -- Pipeline identity (overridden by subclasses) --
+    pipeline_id: Optional[str] = None
+    version: Optional[str] = None
+    description: Optional[str] = None
+
+    # -- Resource hints --
     gpu: Optional[str] = None
     min_vram_gb: Optional[int] = None
     cpu_only: bool = False
 
-    _meta: PipelineMeta = field(default_factory=PipelineMeta)
+    # -- Framework-managed state --
+    _state: PipelineState = PipelineState.IDLE
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        cls._meta = PipelineMeta()
+        if cls.pipeline_id is None:
+            cls.pipeline_id = cls.__name__.lower()
+        cls._state = PipelineState.IDLE
+
+    @property
+    def state(self) -> PipelineState:
+        """Current health state of the pipeline."""
+        return self._state
 
     @abc.abstractmethod
     def setup(self) -> None:
@@ -127,3 +190,11 @@ class StreamPipeline(abc.ABC):
 
         The default implementation is a no-op.
         """
+
+    @classmethod
+    def prepare_models(cls) -> None:
+        """Download and prepare model artifacts ahead of time.
+
+        See :meth:`Pipeline.prepare_models` for details.
+        """
+        _LOG.info("%s.prepare_models(): no-op (override to download models)", cls.__name__)

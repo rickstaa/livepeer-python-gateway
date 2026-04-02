@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .pipeline import Pipeline, StreamPipeline
+from .registry import PipelineRegistry
 
 _LOG = logging.getLogger(__name__)
 
@@ -72,6 +73,10 @@ def _load_pipeline_class(module_path: str) -> type:
         raise TypeError(
             f"No Pipeline or StreamPipeline subclass found in {module_path}"
         )
+
+    # Auto-register all discovered pipelines
+    for cls in candidates:
+        PipelineRegistry.register(cls)
 
     if len(candidates) > 1:
         _LOG.warning(
@@ -149,6 +154,14 @@ def cmd_predict(args: argparse.Namespace) -> None:
         print(json.dumps(result, indent=2))
     else:
         print(result)
+
+
+def cmd_prepare(args: argparse.Namespace) -> None:
+    """Download and prepare model artifacts."""
+    pipeline_cls = _load_pipeline_class(args.module)
+    _LOG.info("Preparing models for %s...", pipeline_cls.__name__)
+    pipeline_cls.prepare_models()
+    _LOG.info("Model preparation complete.")
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -276,6 +289,9 @@ RUN pip install --no-cache-dir livepeer-gateway
 {req_install}COPY {module_name} .
 COPY schema.json .
 
+# Download model artifacts during build (not at runtime)
+RUN livepeer prepare {module_name}
+
 EXPOSE 8000
 
 CMD ["livepeer", "serve", "{module_name}", "--host", "0.0.0.0", "--port", "8000"]
@@ -352,6 +368,13 @@ def main() -> None:
     )
     schema_parser.add_argument("module", help="Path to pipeline .py file")
 
+    # -- prepare --
+    prepare_parser = subparsers.add_parser(
+        "prepare",
+        help="Download and prepare model artifacts",
+    )
+    prepare_parser.add_argument("module", help="Path to pipeline .py file")
+
     # -- push --
     push_parser = subparsers.add_parser(
         "push",
@@ -379,6 +402,7 @@ def main() -> None:
 
     commands = {
         "predict": cmd_predict,
+        "prepare": cmd_prepare,
         "serve": cmd_serve,
         "schema": cmd_schema,
         "push": cmd_push,

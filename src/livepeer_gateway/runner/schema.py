@@ -155,6 +155,17 @@ def extract_schema(pipeline_cls: type) -> dict[str, Any]:
     if required:
         schema["required"] = required
 
+    # Pipeline identity metadata
+    pipeline_id = getattr(pipeline_cls, "pipeline_id", None)
+    if pipeline_id:
+        schema["x-pipeline-id"] = pipeline_id
+    version = getattr(pipeline_cls, "version", None)
+    if version:
+        schema["x-version"] = version
+    description = getattr(pipeline_cls, "description", None)
+    if description:
+        schema["description"] = description
+
     # Resource hints
     gpu = getattr(pipeline_cls, "gpu", None)
     if gpu:

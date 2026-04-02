@@ -25,13 +25,21 @@ from livepeer_gateway.runner import Input, Output, Pipeline
 class TextToImage(Pipeline):
     """Generate images from text prompts."""
 
+    pipeline_id = "text-to-image"
+    version = "1.0.0"
+    description = "Generate images from text prompts using diffusion models"
     gpu = "A100"
     min_vram_gb = 24
+
+    @classmethod
+    def prepare_models(cls) -> None:
+        """Download model checkpoints during Docker build."""
+        print("TextToImage: downloading model weights (stub)")
 
     def setup(self) -> None:
         """Load the diffusion model.
 
-        In production this would download and initialise model weights.
+        In production this would load the weights downloaded by prepare_models().
         """
         print("TextToImage: setup complete (stub)")
 

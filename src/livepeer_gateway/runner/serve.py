@@ -37,8 +37,9 @@ from typing import Any, AsyncIterator, Iterator, Optional
 from aiohttp import web
 
 from .inputs import InputDescriptor, OutputDescriptor
-from .pipeline import Pipeline, StreamPipeline
+from .pipeline import Pipeline, PipelineState, StreamPipeline
 from .schema import extract_schema
+from .registry import PipelineRegistry
 
 _LOG = logging.getLogger(__name__)
 
@@ -326,8 +327,21 @@ class PipelineServer:
         return web.json_response(self._schema)
 
     async def _handle_health(self, request: web.Request) -> web.Response:
-        """Handle GET /health requests."""
-        return web.json_response({"status": "healthy"})
+        """Handle GET /health requests with pipeline state."""
+        state = self.pipeline.state
+        status_code = 200 if state == PipelineState.READY else 503
+        return web.json_response(
+            {
+                "status": state.value,
+                "pipeline_id": getattr(self.pipeline, "pipeline_id", None),
+                "version": getattr(self.pipeline, "version", None),
+            },
+            status=status_code,
+        )
+
+    async def _handle_pipelines(self, request: web.Request) -> web.Response:
+        """Handle GET /pipelines — list all registered pipelines."""
+        return web.json_response(PipelineRegistry.list_with_info())
 
     def create_app(self) -> web.Application:
         """Build and return the aiohttp Application (without starting it)."""
@@ -335,13 +349,21 @@ class PipelineServer:
         app.router.add_post("/predict", self._handle_predict)
         app.router.add_get("/schema", self._handle_schema)
         app.router.add_get("/health", self._handle_health)
+        app.router.add_get("/pipelines", self._handle_pipelines)
         return app
 
     def run(self) -> None:
         """Set up the pipeline and start the HTTP server (blocking)."""
+        self.pipeline._state = PipelineState.LOADING
         _LOG.info("Running pipeline setup...")
-        self.pipeline.setup()
-        _LOG.info("Pipeline setup complete.")
+        try:
+            self.pipeline.setup()
+            self.pipeline._state = PipelineState.READY
+            _LOG.info("Pipeline setup complete.")
+        except Exception:
+            self.pipeline._state = PipelineState.ERROR
+            _LOG.exception("Pipeline setup failed")
+            raise
 
         app = self.create_app()
         _LOG.info("Starting server on %s:%s", self.host, self.port)
@@ -378,7 +400,19 @@ class StreamPipelineServer:
         return web.json_response(self._schema)
 
     async def _handle_health(self, request: web.Request) -> web.Response:
-        return web.json_response({"status": "healthy"})
+        state = self.pipeline.state
+        status_code = 200 if state == PipelineState.READY else 503
+        return web.json_response(
+            {
+                "status": state.value,
+                "pipeline_id": getattr(self.pipeline, "pipeline_id", None),
+                "version": getattr(self.pipeline, "version", None),
+            },
+            status=status_code,
+        )
+
+    async def _handle_pipelines(self, request: web.Request) -> web.Response:
+        return web.json_response(PipelineRegistry.list_with_info())
 
     async def _handle_params(self, request: web.Request) -> web.Response:
         """Handle POST /params for live parameter updates."""
@@ -483,13 +517,21 @@ class StreamPipelineServer:
         app.router.add_post("/params", self._handle_params)
         app.router.add_get("/schema", self._handle_schema)
         app.router.add_get("/health", self._handle_health)
+        app.router.add_get("/pipelines", self._handle_pipelines)
         return app
 
     def run(self) -> None:
         """Set up the pipeline and start the HTTP server (blocking)."""
+        self.pipeline._state = PipelineState.LOADING
         _LOG.info("Running stream pipeline setup...")
-        self.pipeline.setup()
-        _LOG.info("Stream pipeline setup complete.")
+        try:
+            self.pipeline.setup()
+            self.pipeline._state = PipelineState.READY
+            _LOG.info("Stream pipeline setup complete.")
+        except Exception:
+            self.pipeline._state = PipelineState.ERROR
+            _LOG.exception("Stream pipeline setup failed")
+            raise
 
         app = self.create_app()
         _LOG.info("Starting stream server on %s:%s", self.host, self.port)
