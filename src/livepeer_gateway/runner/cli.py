@@ -124,7 +124,23 @@ def cmd_predict(args: argparse.Namespace) -> None:
 
     _LOG.info("Running predict with params: %s", params)
     result = pipeline.predict(**params)
-    if isinstance(result, bytes):
+
+    import types
+    if isinstance(result, types.GeneratorType):
+        # Streaming output: print tokens as they arrive
+        for token in result:
+            print(token, end="", flush=True)
+        print()
+    elif isinstance(result, types.AsyncGeneratorType):
+        import asyncio
+
+        async def _consume():
+            async for token in result:
+                print(token, end="", flush=True)
+            print()
+
+        asyncio.run(_consume())
+    elif isinstance(result, bytes):
         # Write binary output to file
         output_path = args.output or "output.bin"
         Path(output_path).write_bytes(result)

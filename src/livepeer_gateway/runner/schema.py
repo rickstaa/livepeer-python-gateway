@@ -171,6 +171,9 @@ def extract_schema(pipeline_cls: type) -> dict[str, Any]:
             output_info["media_type"] = return_annotation.media_type
         if return_annotation.description:
             output_info["description"] = return_annotation.description
+        if return_annotation.type == "text_stream":
+            output_info["streaming"] = True
+            output_info["protocol"] = "sse"
         schema["x-output"] = output_info
 
     return schema

@@ -96,7 +96,7 @@ def Output(
     """Declare the output type of a pipeline's ``predict()`` method.
 
     Supported *type* values: ``"json"``, ``"image"``, ``"audio"``,
-    ``"video"``, ``"text"``.
+    ``"video"``, ``"text"``, ``"text_stream"``.
 
     Example::
 

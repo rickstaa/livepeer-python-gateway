@@ -2,9 +2,16 @@
 
 For **request-response** pipelines the server exposes:
 
-- ``POST /predict``       -- run inference, return result
+- ``POST /predict``       -- run inference, return result (or SSE stream
+                             when ``predict()`` yields tokens)
 - ``GET  /schema``        -- return the JSON schema
 - ``GET  /health``        -- liveness probe
+
+When ``predict()`` is a generator (sync or async), or the pipeline
+declares ``Output(type="text_stream")``, the ``/predict`` endpoint
+automatically responds with ``text/event-stream`` (Server-Sent Events).
+This follows the same SSE convention used by Replicate, OpenAI, and
+other LLM serving platforms for token-by-token streaming.
 
 For **stream** pipelines the server additionally manages trickle
 subscribe/publish channels so ``on_frame()`` is called for every
@@ -24,7 +31,8 @@ import inspect
 import io
 import json
 import logging
-from typing import Any, Optional
+import types
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from aiohttp import web
 
@@ -171,10 +179,85 @@ def _serialise_result(result: Any, output: Optional[OutputDescriptor]) -> web.Re
     return web.json_response({"output": str(result)})
 
 
+def _is_generator(obj: Any) -> bool:
+    """Check if *obj* is a sync or async generator/iterator."""
+    return isinstance(obj, (types.GeneratorType, types.AsyncGeneratorType))
+
+
+def _wants_sse(request: web.Request, output: Optional[OutputDescriptor]) -> bool:
+    """Determine whether the response should be SSE.
+
+    Returns True if the client sends ``Accept: text/event-stream`` or
+    the pipeline declares ``Output(type="text_stream")``.
+    """
+    if output and output.type == "text_stream":
+        return True
+    accept = request.headers.get("Accept", "")
+    return "text/event-stream" in accept
+
+
+async def _stream_sse(
+    result: Any,
+    response: web.StreamResponse,
+) -> None:
+    """Consume a sync or async generator and write SSE events.
+
+    Each yielded value becomes one SSE ``data:`` frame.  A final
+    ``data: [DONE]`` event signals the end of the stream, matching
+    the convention used by OpenAI and Replicate.
+    """
+    try:
+        if isinstance(result, types.AsyncGeneratorType):
+            async for token in result:
+                event = _sse_encode(token)
+                await response.write(event)
+        elif isinstance(result, types.GeneratorType):
+            for token in result:
+                event = _sse_encode(token)
+                await response.write(event)
+        else:
+            # Single value — send as one event
+            event = _sse_encode(result)
+            await response.write(event)
+    except (ConnectionResetError, ConnectionError, ConnectionAbortedError) as e:
+        # Client disconnected mid-stream (normal for SSE clients)
+        _LOG.debug("SSE client disconnected: %s", e)
+        return
+    except Exception:
+        _LOG.exception("Error during SSE streaming")
+        try:
+            error_event = f"event: error\ndata: {json.dumps({'error': 'Stream failed'})}\n\n"
+            await response.write(error_event.encode("utf-8"))
+        except Exception:
+            pass
+        return
+    # Send the [DONE] sentinel
+    try:
+        await response.write(b"data: [DONE]\n\n")
+    except Exception:
+        pass
+
+
+def _sse_encode(token: Any) -> bytes:
+    """Encode a single token/chunk as an SSE ``data:`` frame."""
+    if isinstance(token, str):
+        payload = json.dumps({"output": token, "type": "token"})
+    elif isinstance(token, dict):
+        payload = json.dumps(token)
+    else:
+        payload = json.dumps({"output": str(token), "type": "token"})
+    return f"data: {payload}\n\n".encode("utf-8")
+
+
 class PipelineServer:
     """HTTP server wrapping a :class:`Pipeline` instance.
 
     Exposes ``/predict``, ``/schema``, and ``/health`` endpoints.
+
+    When ``predict()`` returns a generator (sync or async), or the
+    pipeline declares ``Output(type="text_stream")``, the ``/predict``
+    endpoint responds with Server-Sent Events for token-by-token
+    streaming — the standard pattern for LLM serving.
     """
 
     def __init__(self, pipeline: Pipeline, *, host: str = "0.0.0.0", port: int = 8000) -> None:
@@ -186,7 +269,12 @@ class PipelineServer:
         self._predict_sig = inspect.signature(pipeline.predict)
 
     async def _handle_predict(self, request: web.Request) -> web.Response:
-        """Handle POST /predict requests."""
+        """Handle POST /predict requests.
+
+        Automatically detects whether to return a single response or
+        stream SSE events based on the predict() return type and
+        client Accept header.
+        """
         try:
             if request.content_type == "application/json":
                 params = await request.json()
@@ -204,14 +292,32 @@ class PipelineServer:
 
         try:
             result = self.pipeline.predict(**cleaned)
-            # Support async predict methods
-            if asyncio.iscoroutine(result):
+            # Await coroutines, but not generators (they stream as SSE)
+            if inspect.iscoroutine(result):
                 result = await result
         except Exception:
             _LOG.exception("Pipeline predict() failed")
             return web.json_response(
                 {"error": "Inference failed"}, status=500
             )
+
+        # SSE streaming path: generator result or text_stream output type
+        if _is_generator(result) or (
+            not _is_generator(result) and _wants_sse(request, self._output)
+        ):
+            response = web.StreamResponse(
+                status=200,
+                headers={
+                    "Content-Type": "text/event-stream",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+            await response.prepare(request)
+            await _stream_sse(result, response)
+            await response.write_eof()
+            return response
 
         return _serialise_result(result, self._output)
 
@@ -348,7 +454,7 @@ class StreamPipelineServer:
                         result = self.pipeline.on_frame(
                             input_data, **self._current_params
                         )
-                        if asyncio.iscoroutine(result):
+                        if inspect.iscoroutine(result):
                             result = await result
 
                         if result is not None:
